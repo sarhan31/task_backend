@@ -22,11 +22,19 @@ connectDB();
 
 const app = express();
 
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:3001',
+  'http://127.0.0.1:3000',
+  'https://task-frontend-puce.vercel.app',
+  process.env.FRONTEND_URL
+].filter(Boolean);
+
 // Standard Middlewares
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(cors({
-  origin: ['http://localhost:3000', 'http://localhost:3001', 'http://127.0.0.1:3000'],
+  origin: allowedOrigins,
   credentials: true
 }));
 app.use(helmet({
