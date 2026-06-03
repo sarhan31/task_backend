@@ -49,6 +49,26 @@ const attachmentSchema = new mongoose.Schema({
   }
 }, { _id: false });
 
+const assignmentResponseSchema = new mongoose.Schema({
+  user: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'User',
+    required: true
+  },
+  status: {
+    type: String,
+    enum: ['pending', 'accepted', 'denied'],
+    default: 'pending'
+  },
+  reason: {
+    type: String,
+    default: ''
+  },
+  respondedAt: {
+    type: Date
+  }
+}, { _id: false });
+
 const taskSchema = new mongoose.Schema(
   {
     title: {
@@ -83,6 +103,10 @@ const taskSchema = new mongoose.Schema(
       type: String,
       enum: ['pending', 'accepted', 'denied'],
       default: 'pending'
+    },
+    assignmentResponses: {
+      type: [assignmentResponseSchema],
+      default: []
     },
     pendingStatusChange: {
       newStatus: { type: String },
@@ -158,8 +182,6 @@ const taskSchema = new mongoose.Schema(
       required: true
     },
     // optional fields for audit
-    approvedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-    approvedAt: { type: Date },
     deniedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'

@@ -15,6 +15,45 @@ const isCloudinaryConfigured = () => {
   );
 };
 
+const getUserAssignmentResponse = (task, userId) => {
+  if (!task?.assignedToAll || !userId) return null;
+  return (task.assignmentResponses || []).find(
+    (entry) => entry.user?.toString() === userId.toString()
+  );
+};
+
+const setUserAssignmentResponse = (task, userId, status, reason = '') => {
+  const existing = getUserAssignmentResponse(task, userId);
+  if (existing) {
+    existing.status = status;
+    existing.reason = reason;
+    existing.respondedAt = new Date();
+    return existing;
+  }
+
+  const response = {
+    user: userId,
+    status,
+    reason,
+    respondedAt: new Date()
+  };
+  task.assignmentResponses.push(response);
+  return response;
+};
+
+const serializeTaskForUser = (task, user) => {
+  const plainTask = typeof task.toObject === 'function' ? task.toObject() : task;
+  if (user?.role !== 'admin' && plainTask.assignedToAll) {
+    const response = getUserAssignmentResponse(task, user._id);
+    return {
+      ...plainTask,
+      assignmentStatus: response?.status || 'pending',
+      denialReason: response?.reason || ''
+    };
+  }
+  return plainTask;
+};
+
 // @desc    Get all tasks
 // @route   GET /api/tasks
 // @access  Private
@@ -49,7 +88,7 @@ export const getTasks = async (req, res) => {
       .populate('creator', 'name email')
       .sort({ createdAt: -1 });
 
-    res.json(tasks);
+    res.json(tasks.map((task) => serializeTaskForUser(task, req.user)));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -74,11 +113,12 @@ export const getTaskById = async (req, res) => {
     // Permission checks
     if (req.user.role !== 'admin' && 
         task.assignedTo?.toString() !== req.user._id.toString() &&
-        task.creator?.toString() !== req.user._id.toString()) {
+        task.creator?.toString() !== req.user._id.toString() &&
+        !task.assignedToAll) {
       return res.status(403).json({ message: 'Not authorized to view this task' });
     }
 
-    res.json(task);
+    res.json(serializeTaskForUser(task, req.user));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -849,18 +889,21 @@ export const acceptTaskAssignment = async (req, res) => {
       return res.status(403).json({ message: 'This task is not assigned to you' });
     }
 
-    if (task.assignmentStatus === 'accepted') {
+    const existingResponse = getUserAssignmentResponse(task, req.user._id);
+    const currentAssignmentStatus = task.assignedToAll
+      ? existingResponse?.status
+      : task.assignmentStatus;
+
+    if (currentAssignmentStatus === 'accepted') {
       return res.status(400).json({ message: 'Task already accepted' });
     }
 
-    // For tasks assigned to all, we need to track individual acceptances
-    // For now, we'll just update the status for the user's view
-    task.assignmentStatus = 'accepted';
-    task.status = 'Accepted';
-    
-    // If assigned to all, set the assignedTo to current user after acceptance
-    if (task.assignedToAll && !task.assignedTo) {
-      task.assignedTo = req.user._id;
+    if (task.assignedToAll) {
+      setUserAssignmentResponse(task, req.user._id, 'accepted');
+      task.assignmentStatus = 'pending';
+    } else {
+      task.assignmentStatus = 'accepted';
+      task.status = 'Accepted';
     }
     
     task.statusHistory.push({ 
@@ -881,7 +924,7 @@ export const acceptTaskAssignment = async (req, res) => {
       .populate('assignedTo', 'name email role')
       .populate('creator', 'name email');
 
-    res.json(populated);
+    res.json(serializeTaskForUser(populated, req.user));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -909,10 +952,17 @@ export const denyTaskAssignment = async (req, res) => {
       return res.status(403).json({ message: 'This task is not assigned to you' });
     }
 
-    task.assignmentStatus = 'denied';
-    task.status = 'Denied';
-    task.deniedBy = req.user._id;
-    task.denialReason = reason || 'No reason provided';
+    const denialReason = reason || 'No reason provided';
+
+    if (task.assignedToAll) {
+      setUserAssignmentResponse(task, req.user._id, 'denied', denialReason);
+      task.assignmentStatus = 'pending';
+    } else {
+      task.assignmentStatus = 'denied';
+      task.status = 'Denied';
+      task.deniedBy = req.user._id;
+      task.denialReason = denialReason;
+    }
     
     task.statusHistory.push({ 
       status: 'Denied', 
@@ -922,7 +972,7 @@ export const denyTaskAssignment = async (req, res) => {
     
     task.activityTimeline.push({
       action: 'Task Denied',
-      details: `${req.user.name} denied the task assignment. Reason: ${task.denialReason}`,
+      details: `${req.user.name} denied the task assignment. Reason: ${denialReason}`,
       user: req.user.name,
       date: new Date()
     });
@@ -933,7 +983,7 @@ export const denyTaskAssignment = async (req, res) => {
       .populate('creator', 'name email')
       .populate('deniedBy', 'name email');
 
-    res.json(populated);
+    res.json(serializeTaskForUser(populated, req.user));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
@@ -965,8 +1015,12 @@ export const requestStatusChange = async (req, res) => {
       return res.status(403).json({ message: 'Not authorized to change this task status' });
     }
 
+    const userAssignmentStatus = task.assignedToAll
+      ? getUserAssignmentResponse(task, req.user._id)?.status
+      : task.assignmentStatus;
+
     // Check if task is accepted
-    if (task.assignmentStatus !== 'accepted') {
+    if (userAssignmentStatus !== 'accepted') {
       return res.status(400).json({ message: 'You must accept the task before changing its status' });
     }
 
@@ -990,7 +1044,7 @@ export const requestStatusChange = async (req, res) => {
       .populate('creator', 'name email')
       .populate('pendingStatusChange.requestedBy', 'name email');
 
-    res.json(populated);
+    res.json(serializeTaskForUser(populated, req.user));
   } catch (error) {
     res.status(500).json({ message: error.message });
   }
