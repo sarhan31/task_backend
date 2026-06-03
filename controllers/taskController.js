@@ -278,54 +278,61 @@ export const updateTask = async (req, res) => {
       return res.status(403).json({ message: 'Forbidden: you do not have permission to update this task' });
     }
 
-    // Only admins/creators can change core fields
-    const isAssignedToParticularUser = task.assignedTo && !task.assignedToAll;
-
-    if (isAssignedToParticularUser && (isAdmin || isCreator)) {
-      // Admin/Creator: restrict to status/comments only if assigned to a user
-      task.status = req.body.status || task.status;
+    if (isAdmin || isCreator) {
+      // Full update allowed
+      task.title = req.body.title !== undefined ? req.body.title : task.title;
+      task.description = req.body.description !== undefined ? req.body.description : task.description;
+      task.priority = req.body.priority !== undefined ? req.body.priority : task.priority;
+      task.status = req.body.status !== undefined ? req.body.status : task.status;
+      task.dueDate = req.body.dueDate !== undefined ? req.body.dueDate : task.dueDate;
+      task.progress = req.body.progress !== undefined ? req.body.progress : task.progress;
+      task.tags = req.body.tags !== undefined ? req.body.tags : task.tags;
+      
       if (req.body.comments) {
         task.comments = req.body.comments;
       }
-    } else if (!isAdmin && !isCreator) {
-      // Assignee-only: restrict to progress/status/comments updates
-      task.status = req.body.status || task.status;
-      task.progress = req.body.progress !== undefined ? req.body.progress : task.progress;
-      if (req.body.comments) {
-        task.comments = req.body.comments;
+
+      // Handle assignments
+      if (req.body.assignToAll === true || req.body.assignToAll === 'true') {
+        task.assignedToAll = true;
+        task.assignedTo = null;
+      } else if (req.body.assignToAll === false || req.body.assignToAll === 'false' || req.body.assignToAll === undefined) {
+        if (req.body.assignedToEmail === '') {
+          task.assignedTo = null;
+          task.assignedToAll = false;
+        } else if (req.body.assignedToEmail) {
+          const found = await User.findOne({ email: req.body.assignedToEmail.toLowerCase() });
+          if (!found) {
+            return res.status(400).json({ message: 'Selected assignee was not found' });
+          }
+          if (found.status === 'fired') {
+            return res.status(400).json({ message: 'Cannot assign tasks to a fired user' });
+          }
+          task.assignedTo = found._id;
+          task.assignedToAll = false;
+        } else if (req.body.assignedTo === null || req.body.assignedTo === '') {
+          task.assignedTo = null;
+          task.assignedToAll = false;
+        } else if (req.body.assignedTo) {
+          try {
+            const found = await User.findById(req.body.assignedTo);
+            if (!found) {
+              return res.status(400).json({ message: 'Selected assignee was not found' });
+            }
+            if (found.status === 'fired') {
+              return res.status(400).json({ message: 'Cannot assign tasks to a fired user' });
+            }
+            task.assignedTo = found._id;
+            task.assignedToAll = false;
+          } catch (e) {
+            return res.status(400).json({ message: 'Invalid assignee ID' });
+          }
+        }
       }
     } else {
-      // Admin or creator (unassigned/assignedToAll tasks): full update
-      let assignedUser = task.assignedTo;
-      if (req.body.assignedToEmail) {
-        const found = await User.findOne({ email: req.body.assignedToEmail.toLowerCase() });
-        if (!found) {
-          return res.status(400).json({ message: 'Selected assignee was not found' });
-        }
-        if (found.status === 'fired') {
-          return res.status(400).json({ message: 'Cannot assign tasks to a fired user' });
-        }
-        assignedUser = found._id;
-      } else if (req.body.assignedTo) {
-        const found = await User.findById(req.body.assignedTo);
-        if (!found) {
-          return res.status(400).json({ message: 'Selected assignee was not found' });
-        }
-        if (found.status === 'fired') {
-          return res.status(400).json({ message: 'Cannot assign tasks to a fired user' });
-        }
-        assignedUser = found._id;
-      }
-
-      task.title = req.body.title || task.title;
-      task.description = req.body.description !== undefined ? req.body.description : task.description;
-      task.assignedTo = assignedUser;
-      task.priority = req.body.priority || task.priority;
-      task.status = req.body.status || task.status;
-      task.dueDate = req.body.dueDate || task.dueDate;
+      // Assignee-only: restrict to progress/status/comments updates
+      task.status = req.body.status !== undefined ? req.body.status : task.status;
       task.progress = req.body.progress !== undefined ? req.body.progress : task.progress;
-      task.tags = req.body.tags || task.tags;
-
       if (req.body.comments) {
         task.comments = req.body.comments;
       }
