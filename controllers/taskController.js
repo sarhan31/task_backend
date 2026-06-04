@@ -1,5 +1,6 @@
 import Task from '../models/Task.js';
 import User from '../models/User.js';
+import Team from '../models/Team.js';
 import TaskUpdate from '../models/TaskUpdate.js';
 import cloudinary from '../config/cloudinary.js';
 import fs from 'fs';
@@ -65,10 +66,14 @@ export const getTasks = async (req, res) => {
     const filters = {};
     // Filter by user role: standard users only see tasks assigned to them, created by them, or assigned to all
     if (req.user.role !== 'admin') {
+      const userTeams = await Team.find({ members: req.user._id }).select('_id');
+      const teamIds = userTeams.map(t => t._id);
+
       filters.$or = [
         { assignedTo: req.user._id },
         { creator: req.user._id },
-        { assignedToAll: true }
+        { assignedToAll: true },
+        { assignedToTeam: { $in: teamIds } }
       ];
     }
 
@@ -85,6 +90,8 @@ export const getTasks = async (req, res) => {
 
     const tasks = await Task.find(filters)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email')
       .sort({ createdAt: -1 });
 
@@ -104,6 +111,8 @@ export const getTaskById = async (req, res) => {
   try {
     const task = await Task.findById(req.params.id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     if (!task) {
@@ -111,11 +120,21 @@ export const getTaskById = async (req, res) => {
     }
 
     // Permission checks
-    if (req.user.role !== 'admin' && 
-        task.assignedTo?.toString() !== req.user._id.toString() &&
-        task.creator?.toString() !== req.user._id.toString() &&
-        !task.assignedToAll) {
-      return res.status(403).json({ message: 'Not authorized to view this task' });
+    if (req.user.role !== 'admin') {
+      const isCreator = task.creator?._id?.toString() === req.user._id.toString();
+      const isAssignedTo = task.assignedTo?._id?.toString() === req.user._id.toString();
+      let isTeamMember = false;
+
+      if (task.assignedToTeam) {
+        const team = await Team.findById(task.assignedToTeam._id);
+        if (team && team.members.includes(req.user._id)) {
+          isTeamMember = true;
+        }
+      }
+
+      if (!isCreator && !isAssignedTo && !task.assignedToAll && !isTeamMember) {
+        return res.status(403).json({ message: 'Not authorized to view this task' });
+      }
     }
 
     res.json(serializeTaskForUser(task, req.user));
@@ -135,7 +154,11 @@ export const createTask = async (req, res) => {
     return res.status(403).json({ message: 'Only admin can create tasks' });
   }
   try {
-    const { title, description, assignedToEmail, assignToAll, priority, status, dueDate, progress, tags } = req.body;
+    const { 
+      title, description, assignedToEmail, assignToAll, priority, 
+      status, dueDate, progress, tags, 
+      assignedType, assignedToTeam, responsibleUser 
+    } = req.body;
 
     if (!title || !dueDate) {
       return res.status(400).json({ message: 'Please provide task title and due date' });
@@ -212,6 +235,9 @@ export const createTask = async (req, res) => {
       title,
       description: description || '',
       assignedTo: assignedUser ? assignedUser._id : null,
+      assignedType: assignedType || 'individual',
+      assignedToTeam: assignedToTeam || null,
+      responsibleUser: responsibleUser || null,
       assignedToAll: false,
       priority: priority || 'medium',
       status: initStatus,
@@ -229,7 +255,7 @@ export const createTask = async (req, res) => {
         },
         {
           action: 'Task Assigned',
-            details: assignedUser ? `Task was assigned to ${assignedUser.name}` : 'Task was created without an assignee',
+          details: assignedType === 'team' || assignedType === 'team_member' ? 'Task was assigned to a team' : (assignedUser ? `Task was assigned to ${assignedUser.name}` : 'Task was created without an assignee'),
           user: req.user.name,
           date: new Date()
         }
@@ -245,6 +271,8 @@ export const createTask = async (req, res) => {
 
     const populatedTask = await Task.findById(task._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.status(201).json(populatedTask);
@@ -273,8 +301,16 @@ export const updateTask = async (req, res) => {
     const isAdmin = req.user.role === 'admin';
     const isCreator = task.creator.toString() === req.user._id.toString();
     const isAssignee = task.assignedTo && task.assignedTo.toString() === req.user._id.toString();
+    
+    let isTeamMember = false;
+    if (task.assignedToTeam) {
+      const team = await Team.findById(task.assignedToTeam);
+      if (team && team.members.includes(req.user._id)) {
+        isTeamMember = true;
+      }
+    }
 
-    if (!isAdmin && !isCreator && !isAssignee) {
+    if (!isAdmin && !isCreator && !isAssignee && !isTeamMember && !task.assignedToAll) {
       return res.status(403).json({ message: 'Forbidden: you do not have permission to update this task' });
     }
 
@@ -291,6 +327,11 @@ export const updateTask = async (req, res) => {
       if (req.body.comments) {
         task.comments = req.body.comments;
       }
+
+      // Handle team assignments directly if provided
+      if (req.body.assignedType) task.assignedType = req.body.assignedType;
+      if (req.body.assignedToTeam !== undefined) task.assignedToTeam = req.body.assignedToTeam;
+      if (req.body.responsibleUser !== undefined) task.responsibleUser = req.body.responsibleUser;
 
       // Handle assignments
       if (req.body.assignToAll === true || req.body.assignToAll === 'true') {
@@ -342,6 +383,8 @@ export const updateTask = async (req, res) => {
     
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.json(populated);
@@ -401,10 +444,19 @@ export const updateTaskStatus = async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
 
-    // Standard user can update status if assigned
+    // Standard user can update status if assigned or team member
+    let isTeamMember = false;
+    if (task.assignedToTeam) {
+      const team = await Team.findById(task.assignedToTeam);
+      if (team && team.members.includes(req.user._id)) {
+        isTeamMember = true;
+      }
+    }
+
     if (req.user.role !== 'admin' && 
         task.assignedTo?.toString() !== req.user._id.toString() &&
-        task.creator.toString() !== req.user._id.toString()) {
+        task.creator.toString() !== req.user._id.toString() &&
+        !isTeamMember) {
       return res.status(403).json({ message: 'Not authorized to change this task status' });
     }
 
@@ -554,10 +606,19 @@ export const startTask = async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
 
-    // Auth validation: only assigned user or creator or admin can start
+    // Auth validation: only assigned user or creator or team member or admin can start
+    let isTeamMember = false;
+    if (task.assignedToTeam) {
+      const team = await Team.findById(task.assignedToTeam);
+      if (team && team.members.includes(req.user._id)) {
+        isTeamMember = true;
+      }
+    }
+
     if (req.user.role !== 'admin' && 
         task.assignedTo?.toString() !== req.user._id.toString() &&
-        task.creator.toString() !== req.user._id.toString()) {
+        task.creator.toString() !== req.user._id.toString() &&
+        !isTeamMember) {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
@@ -603,9 +664,18 @@ export const submitProgressUpdate = async (req, res) => {
     }
 
     // Auth validation
+    let isTeamMember = false;
+    if (task.assignedToTeam) {
+      const team = await Team.findById(task.assignedToTeam);
+      if (team && team.members.includes(req.user._id)) {
+        isTeamMember = true;
+      }
+    }
+
     if (req.user.role !== 'admin' && 
         task.assignedTo?.toString() !== req.user._id.toString() &&
-        task.creator.toString() !== req.user._id.toString()) {
+        task.creator.toString() !== req.user._id.toString() &&
+        !isTeamMember) {
       return res.status(403).json({ message: 'Not authorized to update progress' });
     }
 
@@ -721,10 +791,19 @@ export const requestTaskReview = async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
 
-    // Only assigned user, creator, or admin can request review
+    // Only assigned user, creator, team member, or admin can request review
+    let isTeamMember = false;
+    if (task.assignedToTeam) {
+      const team = await Team.findById(task.assignedToTeam);
+      if (team && team.members.includes(req.user._id)) {
+        isTeamMember = true;
+      }
+    }
+
     if (req.user.role !== 'admin' && 
         task.assignedTo?.toString() !== req.user._id.toString() &&
-        task.creator.toString() !== req.user._id.toString()) {
+        task.creator.toString() !== req.user._id.toString() &&
+        !isTeamMember) {
       return res.status(403).json({ message: 'Not authorized' });
     }
 

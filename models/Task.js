@@ -84,6 +84,19 @@ const taskSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'
     },
+    assignedType: {
+      type: String,
+      enum: ['individual', 'team', 'team_member'],
+      default: 'individual'
+    },
+    assignedToTeam: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'Team'
+    },
+    responsibleUser: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'User'
+    },
     priority: {
       type: String,
       enum: ['low', 'medium', 'high', 'urgent'],
