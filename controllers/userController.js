@@ -62,6 +62,8 @@ const compileReport = async (type = 'tasks', period = '30d') => {
   const dateFilter = periodStart ? { createdAt: { $gte: periodStart } } : {};
   const tasks = await Task.find(dateFilter)
     .populate('assignedTo', 'name email role')
+    .populate('assignedToTeam', 'teamName')
+    .populate('responsibleUser', 'name email')
     .populate('creator', 'name email')
     .sort({ createdAt: -1 });
 
@@ -71,15 +73,31 @@ const compileReport = async (type = 'tasks', period = '30d') => {
   const pending = tasks.filter((task) => ['Assigned', 'Accepted', 'todo'].includes(task.status)).length;
   const efficiency = total > 0 ? Math.round((completed / total) * 100) : 0;
 
-  let rows = tasks.map((task) => ({
-    title: task.title,
-    assignee: task.assignedTo?.name || (task.assignedToAll ? 'All Members' : 'Unassigned'),
-    status: task.status,
-    priority: task.priority,
-    progress: task.progressPercentage ?? task.progress ?? 0,
-    dueDate: task.dueDate,
-    createdAt: task.createdAt?.toISOString?.() || task.createdAt
-  }));
+  let rows = tasks.map((task) => {
+    let assigneeName = 'Unassigned';
+    if (task.assignedTo) {
+      assigneeName = task.assignedTo.name || 'Assigned User';
+    } else if (task.assignedToTeam) {
+      const teamName = task.assignedToTeam.teamName || 'Team';
+      if (task.assignedType === 'team_member' && task.responsibleUser) {
+        assigneeName = `${task.responsibleUser.name || 'Member'} (${teamName})`;
+      } else {
+        assigneeName = teamName;
+      }
+    } else if (task.assignedToAll) {
+      assigneeName = 'All Members';
+    }
+
+    return {
+      title: task.title,
+      assignee: assigneeName,
+      status: task.status,
+      priority: task.priority,
+      progress: task.progressPercentage ?? task.progress ?? 0,
+      dueDate: task.dueDate,
+      createdAt: task.createdAt?.toISOString?.() || task.createdAt
+    };
+  });
 
   if (type === 'users') {
     const users = await User.find({ role: { $ne: 'admin' } }).select('name email role status createdAt');

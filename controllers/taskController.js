@@ -42,6 +42,13 @@ const setUserAssignmentResponse = (task, userId, status, reason = '') => {
   return response;
 };
 
+const isUserInAssignedTeam = async (task, userId) => {
+  if (!task?.assignedToTeam || !userId) return false;
+  const teamId = task.assignedToTeam._id || task.assignedToTeam;
+  const team = await Team.findById(teamId).select('members');
+  return Boolean(team?.members?.some((memberId) => memberId.toString() === userId.toString()));
+};
+
 const serializeTaskForUser = (task, user) => {
   const plainTask = typeof task.toObject === 'function' ? task.toObject() : task;
   if (user?.role !== 'admin' && plainTask.assignedToAll) {
@@ -226,6 +233,8 @@ export const createTask = async (req, res) => {
 
       const populatedTask = await Task.findById(task._id)
         .populate('assignedTo', 'name email role')
+        .populate('assignedToTeam', 'teamName')
+        .populate('responsibleUser', 'name email')
         .populate('creator', 'name email');
 
       return res.status(201).json(populatedTask);
@@ -469,7 +478,9 @@ export const updateTaskStatus = async (req, res) => {
 
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
-      .populate('assignedTo', 'name email role');
+      .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email');
 
     res.json(populated);
   } catch (error) {
@@ -637,6 +648,8 @@ export const startTask = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.json(populated);
@@ -770,6 +783,8 @@ export const submitProgressUpdate = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.status(200).json({ task: populated, update: taskUpdate });
@@ -821,6 +836,8 @@ export const requestTaskReview = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.json(populated);
@@ -871,6 +888,8 @@ export const approveTask = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email')
       .populate('approvedBy', 'name email');
 
@@ -916,6 +935,8 @@ export const rejectTask = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.json(populated);
@@ -937,10 +958,13 @@ export const getTaskUpdates = async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
 
+    const isTeamMember = await isUserInAssignedTeam(task, req.user._id);
+
     // Auth check
-    if (req.user.role !== 'admin' && 
+    if (req.user.role !== 'admin' &&
         task.assignedTo?.toString() !== req.user._id.toString() &&
-        task.creator.toString() !== req.user._id.toString()) {
+        task.creator.toString() !== req.user._id.toString() &&
+        !isTeamMember) {
       return res.status(403).json({ message: 'Not authorized' });
     }
 
@@ -967,8 +991,11 @@ export const acceptTaskAssignment = async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
 
-    // Check if user can accept: either assigned to them specifically OR assigned to all
-    const canAccept = task.assignedToAll || 
+    const isTeamMember = await isUserInAssignedTeam(task, req.user._id);
+
+    // Check if user can accept: either assigned to them specifically, assigned to all, or assigned to their team
+    const canAccept = task.assignedToAll ||
+                      isTeamMember ||
                       (task.assignedTo && task.assignedTo.toString() === req.user._id.toString());
     
     if (!canAccept) {
@@ -1008,6 +1035,8 @@ export const acceptTaskAssignment = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.json(serializeTaskForUser(populated, req.user));
@@ -1030,8 +1059,11 @@ export const denyTaskAssignment = async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
 
-    // Check if user can deny: either assigned to them specifically OR assigned to all
-    const canDeny = task.assignedToAll || 
+    const isTeamMember = await isUserInAssignedTeam(task, req.user._id);
+
+    // Check if user can deny: either assigned to them specifically, assigned to all, or assigned to their team
+    const canDeny = task.assignedToAll ||
+                    isTeamMember ||
                     (task.assignedTo && task.assignedTo.toString() === req.user._id.toString());
     
     if (!canDeny) {
@@ -1066,6 +1098,8 @@ export const denyTaskAssignment = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email')
       .populate('deniedBy', 'name email');
 
@@ -1093,8 +1127,11 @@ export const requestStatusChange = async (req, res) => {
       return res.status(404).json({ message: 'Task not found' });
     }
 
+    const isTeamMember = await isUserInAssignedTeam(task, req.user._id);
+
     // Check if user can request status change
-    const canRequest = task.assignedToAll || 
+    const canRequest = task.assignedToAll ||
+                       isTeamMember ||
                        (task.assignedTo && task.assignedTo.toString() === req.user._id.toString());
     
     if (!canRequest) {
@@ -1103,7 +1140,9 @@ export const requestStatusChange = async (req, res) => {
 
     const userAssignmentStatus = task.assignedToAll
       ? getUserAssignmentResponse(task, req.user._id)?.status
-      : task.assignmentStatus;
+      : task.assignedType === 'team'
+        ? 'accepted'
+        : task.assignmentStatus;
 
     // Check if task is accepted
     if (userAssignmentStatus !== 'accepted') {
@@ -1127,6 +1166,8 @@ export const requestStatusChange = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email')
       .populate('pendingStatusChange.requestedBy', 'name email');
 
@@ -1181,6 +1222,8 @@ export const approveStatusChange = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.json(populated);
@@ -1225,6 +1268,8 @@ export const rejectStatusChange = async (req, res) => {
     const updatedTask = await task.save();
     const populated = await Task.findById(updatedTask._id)
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email');
 
     res.json(populated);
@@ -1249,6 +1294,8 @@ export const getPendingApprovals = async (req, res) => {
       'pendingStatusChange.approved': false
     })
       .populate('assignedTo', 'name email role')
+      .populate('assignedToTeam', 'teamName')
+      .populate('responsibleUser', 'name email')
       .populate('creator', 'name email')
       .populate('pendingStatusChange.requestedBy', 'name email')
       .sort({ 'pendingStatusChange.requestedAt': -1 });
