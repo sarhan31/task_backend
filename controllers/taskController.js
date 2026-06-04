@@ -330,8 +330,8 @@ export const updateTask = async (req, res) => {
 
       // Handle team assignments directly if provided
       if (req.body.assignedType) task.assignedType = req.body.assignedType;
-      if (req.body.assignedToTeam !== undefined) task.assignedToTeam = req.body.assignedToTeam;
-      if (req.body.responsibleUser !== undefined) task.responsibleUser = req.body.responsibleUser;
+      if (req.body.assignedToTeam !== undefined) task.assignedToTeam = req.body.assignedToTeam || null;
+      if (req.body.responsibleUser !== undefined) task.responsibleUser = req.body.responsibleUser || null;
 
       // Handle assignments
       if (req.body.assignToAll === true || req.body.assignToAll === 'true') {
