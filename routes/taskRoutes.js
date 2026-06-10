@@ -39,7 +39,8 @@ router.route('/')
   .get(getTasks)
   .post(createTask);
 
-// Get pending approvals (must be before /:id routes)
+// ── Static named routes must come before /:id to avoid Express treating
+//    "pending-approvals" as a task ID ─────────────────────────────────────
 router.get('/pending-approvals', getPendingApprovals);
 
 router.route('/:id')

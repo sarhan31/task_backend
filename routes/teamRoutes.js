@@ -23,18 +23,19 @@ router.use((req, res, next) => {
   next();
 });
 
-// Non-admin routes
+// Non-admin routes — must be before adminOnly middleware and /:id pattern
 router.get('/user/my-teams', getMyTeams);
 router.get('/:id/tasks', getTeamTasks);
-router.get('/:id', getTeamById); // Members can view their own team details too
+router.get('/:id', getTeamById);
 
-// Admin only routes
+// All routes below this line are admin-only
 router.use(adminOnly);
 
 router.route('/')
   .get(getTeams)
   .post(createTeam);
 
+// Named route before /:id to avoid collision
 router.get('/stats/analytics', getTeamAnalytics);
 
 router.route('/:id')

@@ -104,7 +104,7 @@ const taskSchema = new mongoose.Schema(
     },
     status: {
       type: String,
-      enum: ['Assigned', 'Accepted', 'Denied', 'Started', 'In Progress', 'Under Review', 'Approved', 'Rejected', 'Completed', 'todo', 'in_progress', 'in_review', 'completed'],
+      enum: ['Assigned', 'Accepted', 'Denied', 'Started', 'In Progress', 'Pending Approval', 'Under Review', 'Approved', 'Rejected', 'Completed', 'todo', 'in_progress', 'in_review', 'completed'],
       default: 'Assigned'
     },
     // New fields for enhanced workflow
@@ -125,7 +125,7 @@ const taskSchema = new mongoose.Schema(
       newStatus: { type: String },
       requestedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
       requestedAt: { type: Date },
-      approved: { type: Boolean }
+      approved: { type: Boolean, default: false }
     },
     dueDate: {
       type: String,
@@ -209,20 +209,26 @@ const taskSchema = new mongoose.Schema(
   }
 );
 
-// Auto-adjust progress to 100 when status is marked completed, and synchronize progress and progressPercentage
+// Sync progress on save and auto-complete
 taskSchema.pre('save', function (next) {
-  // Sync status compatibility
-  if (this.status === 'completed') this.status = 'Completed';
-  if (this.status === 'in_progress') this.status = 'In Progress';
-  if (this.status === 'in_review') this.status = 'Under Review';
-  if (this.status === 'todo') this.status = 'Assigned';
+  // Normalize legacy lowercase status values to canonical form
+  const legacyMap = {
+    completed:   'Completed',
+    in_progress: 'In Progress',
+    in_review:   'Under Review',
+    todo:        'Assigned',
+  };
+  if (legacyMap[this.status]) {
+    this.status = legacyMap[this.status];
+  }
 
+  // Auto-set progress to 100 when completed or approved
   if (this.status === 'Completed' || this.status === 'Approved') {
     this.progress = 100;
     this.progressPercentage = 100;
   }
-  
-  // Make sure progress and progressPercentage are in sync
+
+  // Keep progress and progressPercentage in sync
   if (this.progress !== this.progressPercentage) {
     if (this.isModified('progressPercentage')) {
       this.progress = this.progressPercentage;
